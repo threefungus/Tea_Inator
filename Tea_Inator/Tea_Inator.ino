@@ -10,6 +10,7 @@
 #define XPT2046_CLK 25   // T_CLK
 #define XPT2046_CS 33    // T_CS
 
+// Define calibration file and whether to repeat calibration on each boot
 #define CALIBRATION_FILE "/TouchCalData1"
 #define REPEAT_CAL false
 
@@ -18,7 +19,7 @@
 #define SCREEN_HEIGHT 240
 #define BUTTON_FONT 2
 #define FONT_SIZE 1
-
+// Define dimensions of buttons on the screen
 #define BUTTON_W 80
 #define BUTTON_H 80
 
@@ -49,7 +50,7 @@ enum State{
 };
 enum State currentState = INIT;
 
-// Define Button instances
+// Define Button instances for first menu, one for each tea variety
 ButtonWidget btnBlack = ButtonWidget(&tft);
 ButtonWidget btnGreen = ButtonWidget(&tft);
 ButtonWidget btnHerbal = ButtonWidget(&tft);
@@ -57,6 +58,7 @@ ButtonWidget btnOolong = ButtonWidget(&tft);
 ButtonWidget btnWhite = ButtonWidget(&tft);
 ButtonWidget btnManual = ButtonWidget(&tft);
 
+// Buttons for second menu
 ButtonWidget btnBack = ButtonWidget(&tft);
 ButtonWidget plusTemp = ButtonWidget(&tft);
 ButtonWidget minusTemp = ButtonWidget(&tft);
@@ -64,11 +66,14 @@ ButtonWidget plusTime = ButtonWidget(&tft);
 ButtonWidget minusTime = ButtonWidget(&tft);
 
 
-
+// Array to hold pointers to first menu buttons for easier access in the FSM
 ButtonWidget* teaBtn[] = {&btnBlack, &btnGreen, &btnHerbal, &btnOolong, &btnWhite, &btnManual};;
+// Calculate the number of buttons in the first menu for use in loops
 uint8_t teaBtnCnt = sizeof(teaBtn) / sizeof(teaBtn[0]);
 
+// Array to hold pointers to second menu buttons for easier access in the FSM
 ButtonWidget* menuTwoBtn[] = {&btnBack, &plusTemp, &minusTemp, &plusTime, &minusTime};;
+// Calculate the number of buttons in the second menu for use in loops
 uint8_t menuTwoCnt = sizeof(menuTwoBtn) / sizeof(menuTwoBtn[0]);
 
 //Keep track of last point user input on touchscreen
@@ -80,72 +85,90 @@ int Last_Touch_Z = 0;
 int steep_Time = 0;
 // integer value of steeping temperature (Fahrenheit)
 int steep_Temp = 0;
+// String to hold the type of tea being steeped for display purposes
+char* teaType = "";
 
+// Action methods for tea variety buttons, setting the steeping time and temperature to the 
+// default values for the respective tea variety and drawing the ready screen with those values
 void btnBlack_pressAction(){
   Serial.print("Black Pressed");
   steep_Time = BLACK_TIME;
   steep_Temp = BLACK_TEMP;
-  drawReadyScreen("Black Tea");
+  teaType = "Black Tea";
+  drawReadyScreen();
 }
-
 void btnGreen_pressAction(){
   Serial.print("Green Pressed");
   steep_Time = GREEN_TIME;
   steep_Temp = GREEN_TEMP;
-  drawReadyScreen("Green Tea");
+  teaType = "Green Tea";
+  drawReadyScreen();
 }
-
 void btnHerbal_pressAction(){
   Serial.print("Herbal Pressed");
   steep_Time = HERBAL_TIME;
   steep_Temp = HERBAL_TEMP;
-  drawReadyScreen("Herbal Tea");
+  teaType = "Herbal Tea";
+  drawReadyScreen();
 }
-
 void btnOolong_pressAction(){
   Serial.print("Oolong Pressed");
   steep_Time = OOLONG_TIME;
   steep_Temp = OOLONG_TEMP;
-  drawReadyScreen("Oolong Tea");
+  teaType = "Oolong Tea";
+  drawReadyScreen();
 }
-
 void btnWhite_pressAction(){
   Serial.print("White Pressed");
   steep_Time = WHITE_TIME;
   steep_Temp = WHITE_TEMP;
-  drawReadyScreen("White Tea");
+  teaType = "White Tea";
+  drawReadyScreen();
 }
-
 void btnManual_pressAction(){
   Serial.print("Manual Pressed");
   steep_Time = BLACK_TIME;
   steep_Temp = BLACK_TEMP;
-  drawReadyScreen("Custom Tea");
+  teaType = "Custom Tea";
+  drawReadyScreen();
 }
 
+// Action method for back button, resetting to initial state and redrawing start screen
 void btnBack_pressAction(){
   currentState = INIT;
   drawStartScreen();
 }
 
+// Action methods for plus and minus buttons on steeping time and temperature, incrementing or 
+// decrementing the respective variable and redrawing the ready screen with updated values
 void plusTemp_pressAction(){
+  Serial.print("Plus Temp Pressed");
   steep_Temp++;
-  drawReadyScreen;
+  if(steep_Temp > 212){
+    steep_Temp = 212;
+  }
+  updateTemp();
 }
-
 void minusTemp_pressAction(){
+  Serial.print("Minus Temp Pressed");
   steep_Temp--;
-  drawReadyScreen;
+  if(steep_Temp < 100){
+    steep_Temp = 100;
+  }
+  updateTemp();
 }
-
 void plusTime_pressAction(){
+  Serial.print("Plus Time Pressed");
   steep_Time++;
-  drawReadyScreen;
+  updateTime();
 }
-
 void minusTime_pressAction(){
+  Serial.print("Minus Time Pressed");
   steep_Time--;
-  drawReadyScreen;
+  if(steep_Time < 0){
+    steep_Time = 0;
+  }
+  updateTime();
 }
 
 
@@ -191,11 +214,13 @@ void drawStartScreen(){
   // Clear the screen before writing to it
   tft.fillScreen(TFT_WHITE);
   tft.setTextColor(TFT_BLACK, TFT_WHITE);
+
   // Set the placement position of the button on the screen
   uint16_t spaceX = ((SCREEN_WIDTH / 3) - BUTTON_W) / 2;
   uint16_t spaceY = ((SCREEN_HEIGHT / 2) - BUTTON_H) / 2;
   uint16_t butX = spaceX;
   uint16_t butY = spaceY;
+
   //Instantiate the buttons, and assign press action methods and release action methods
   // Very poor documentation on these methods, I assume this one is ->
   // initButtonUL(target tft, xCord, yCord, Width, Height, Border Color, Fill Color, Text Color, Label, text font)
@@ -233,7 +258,7 @@ void drawStartScreen(){
 /**
  * Draw ready screen on display, starting with a given time and temp for steeping
  */
-void drawReadyScreen(char* teaType){
+void drawReadyScreen(){
   tft.fillScreen(TFT_WHITE);
   tft.setTextColor(TFT_BLACK, TFT_WHITE);
   tft.setTextSize(FONT_SIZE);
@@ -245,11 +270,11 @@ void drawReadyScreen(char* teaType){
   String tempText = "Steeping Time: " + String(steep_Time / 60) +"min " + String(steep_Time % 60) +"sec";
   tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
 
-  plusTime.initButtonUL(SCREEN_WIDTH-75, textY-15, BUTTON_W/3, BUTTON_H/3, TFT_BLACK, TFT_WHITE, TFT_BLACK, "+", BUTTON_FONT);
+  plusTime.initButtonUL(SCREEN_WIDTH-50, textY-40, BUTTON_W/2, BUTTON_H/2, TFT_BLACK, TFT_WHITE, TFT_BLACK, "+", BUTTON_FONT);
   plusTime.setPressAction(plusTime_pressAction);
   plusTime.drawButton();
 
-  minusTime.initButtonUL(SCREEN_WIDTH-75, textY+15, BUTTON_W/3, BUTTON_H/3, TFT_BLACK, TFT_WHITE, TFT_BLACK, "-", BUTTON_FONT);
+  minusTime.initButtonUL(SCREEN_WIDTH-50, textY+5, BUTTON_W/2, BUTTON_H/2, TFT_BLACK, TFT_WHITE, TFT_BLACK, "-", BUTTON_FONT);
   minusTime.setPressAction(minusTime_pressAction);
   minusTime.drawButton();
 
@@ -258,18 +283,39 @@ void drawReadyScreen(char* teaType){
   tempText = "Steeping Temperature: " + String(steep_Temp) +" F";
   tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
 
-  plusTemp.initButtonUL(SCREEN_WIDTH-75, textY-15, BUTTON_W/3, BUTTON_H/3, TFT_BLACK, TFT_WHITE, TFT_BLACK, "+", BUTTON_FONT);
+  plusTemp.initButtonUL(SCREEN_WIDTH-50, textY-30, BUTTON_W/2, BUTTON_H/2, TFT_BLACK, TFT_WHITE, TFT_BLACK, "+", BUTTON_FONT);
   plusTemp.setPressAction(plusTemp_pressAction);
   plusTemp.drawButton();
 
-  minusTemp.initButtonUL(SCREEN_WIDTH-75, textY+15, BUTTON_W/3, BUTTON_H/3, TFT_BLACK, TFT_WHITE, TFT_BLACK, "-", BUTTON_FONT);
+  minusTemp.initButtonUL(SCREEN_WIDTH-50, textY+15, BUTTON_W/2, BUTTON_H/2, TFT_BLACK, TFT_WHITE, TFT_BLACK, "-", BUTTON_FONT);
   minusTemp.setPressAction(minusTemp_pressAction);
   minusTemp.drawButton();
 
-  btnBack.initButtonUL(SCREEN_WIDTH-65, SCREEN_HEIGHT-45, BUTTON_W-20, BUTTON_H/2, TFT_BLACK, TFT_WHITE, TFT_RED, "Back", BUTTON_FONT);
+  btnBack.initButtonUL(5, SCREEN_HEIGHT-45, BUTTON_W-20, BUTTON_H/2, TFT_BLACK, TFT_WHITE, TFT_RED, "Back", BUTTON_FONT);
   btnBack.setPressAction(btnBack_pressAction);
   btnBack.drawButton();  
   currentState = READY;
+}
+
+// Update the steeping time displayed on the ready screen, called from the plus and minus time buttons
+void updateTime(){
+  int centerX = SCREEN_WIDTH / 2;
+  int textY = 60;
+  tft.fillRect(80, textY-20, SCREEN_WIDTH - 160, 40, TFT_WHITE);
+  tft.setTextColor(TFT_BLACK, TFT_WHITE);
+  tft.setTextSize(FONT_SIZE);
+  String tempText = "Steeping Time: " + String(steep_Time / 60) +"min " + String(steep_Time % 60) +"sec";
+  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
+}
+// Update the steeping temperature displayed on the ready screen, called from the plus and minus temp buttons
+void updateTemp(){
+  int centerX = SCREEN_WIDTH / 2;
+  int textY = 140;
+  tft.fillRect(80, textY-20, SCREEN_WIDTH - 160, 40, TFT_WHITE);
+  tft.setTextColor(TFT_BLACK, TFT_WHITE);
+  tft.setTextSize(FONT_SIZE);
+  String tempText = "Steeping Temperature: " + String(steep_Temp) +" F";
+  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
 }
 
 /**
@@ -297,8 +343,7 @@ void setup() {
 }
 
 void loop() {
-  // static uint32_t scanTime = millis();
-  // uint16_t touch_x = 9999, touch_y = 9999;
+  // Check if the screen is being touched, and if so get the X, Y and Z (pressure) values of the touch and print to serial
   bool pressed = false;
   if(touchscreen.touched()){
     TS_Point p = touchscreen.getPoint();
@@ -307,12 +352,14 @@ void loop() {
     Last_Touch_Z = p.z;
     printTouchToSerial(Last_Touch_X,Last_Touch_Y,Last_Touch_Z);
     pressed = true;
-
+    // Small delay to prevent multiple presses being registered from a single touch
     delay(50);
   }
   else{
     pressed = false;
   }
+
+  //Begin FSM
   switch(currentState){
     case INIT:
       for(uint8_t b = 0; b < teaBtnCnt; b++){
@@ -355,6 +402,10 @@ void loop() {
   
 }
 
+/**
+ * Calibrate the touchscreen, checking for existing calibration data in the file system and using it if valid, 
+ * otherwise running the calibration routine and saving the new calibration data to the file system
+ */
 void touch_calibrate()
 {
   uint16_t calData[5];
