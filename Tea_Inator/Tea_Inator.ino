@@ -2,43 +2,18 @@
 #include <TFT_eSPI.h>
 #include <TFT_eWidget.h>
 #include <XPT2046_Touchscreen.h>
+#include <Adafruit_MLX90614.h>
+#include "ConstantDefinitons.h"
 
-// Define Touchscreen Pins
-#define XPT2046_IRQ 36   // T_IRQ
-#define XPT2046_MOSI 32  // T_DIN
-#define XPT2046_MISO 39  // T_OUT
-#define XPT2046_CLK 25   // T_CLK
-#define XPT2046_CS 33    // T_CS
-
-// Define calibration file and whether to repeat calibration on each boot
-#define CALIBRATION_FILE "/TouchCalData1"
-#define REPEAT_CAL false
-
-// Define Dimensions of touchscreen
-#define SCREEN_WIDTH 320
-#define SCREEN_HEIGHT 240
-#define BUTTON_FONT 2
-#define FONT_SIZE 1
-// Define dimensions of buttons on the screen
-#define BUTTON_W 80
-#define BUTTON_H 80
 
 // Create instances of touchscreen and SPI libraries
 TFT_eSPI tft = TFT_eSPI();
 SPIClass touchscreenSPI = SPIClass(VSPI);
 XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 
-//Define Tea Steeping Parameters
-#define BLACK_TIME 300
-#define BLACK_TEMP 212
-#define GREEN_TIME 120
-#define GREEN_TEMP 175
-#define HERBAL_TIME 300
-#define HERBAL_TEMP 212
-#define OOLONG_TIME 150
-#define OOLONG_TEMP 196
-#define WHITE_TIME 180
-#define WHITE_TEMP 175
+
+// Create instance of the temperature sensor library
+ Adafruit_MLX90614 mlx = Adafruit_MLX90614();
 
 // Define possible states for FSM, and a global to track the current state
 enum State{
@@ -64,7 +39,10 @@ ButtonWidget plusTemp = ButtonWidget(&tft);
 ButtonWidget minusTemp = ButtonWidget(&tft);
 ButtonWidget plusTime = ButtonWidget(&tft);
 ButtonWidget minusTime = ButtonWidget(&tft);
+ButtonWidget startSteeping = ButtonWidget(&tft);
 
+// Stop Button for steeping screen
+ButtonWidget stopSteeping = ButtonWidget(&tft);
 
 // Array to hold pointers to first menu buttons for easier access in the FSM
 ButtonWidget* teaBtn[] = {&btnBlack, &btnGreen, &btnHerbal, &btnOolong, &btnWhite, &btnManual};;
@@ -72,14 +50,22 @@ ButtonWidget* teaBtn[] = {&btnBlack, &btnGreen, &btnHerbal, &btnOolong, &btnWhit
 uint8_t teaBtnCnt = sizeof(teaBtn) / sizeof(teaBtn[0]);
 
 // Array to hold pointers to second menu buttons for easier access in the FSM
-ButtonWidget* menuTwoBtn[] = {&btnBack, &plusTemp, &minusTemp, &plusTime, &minusTime};;
+ButtonWidget* menuTwoBtn[] = {&btnBack, &plusTemp, &minusTemp, &plusTime, &minusTime, &startSteeping};;
 // Calculate the number of buttons in the second menu for use in loops
 uint8_t menuTwoCnt = sizeof(menuTwoBtn) / sizeof(menuTwoBtn[0]);
+
+// Array to hold pointers to third menu buttons for easier access in the FSM
+ButtonWidget* steepingBtn[] = {&stopSteeping};
+// Calculate the number of buttons in the third menu for use in loops
+uint8_t menuThreeCnt = sizeof(steepingBtn) / sizeof(steepingBtn[0]);
 
 //Keep track of last point user input on touchscreen
 int Last_Touch_X = 0;
 int Last_Touch_Y = 0;
 int Last_Touch_Z = 0;
+
+// Double value of current temperature (Fahrenheit)
+double currentTemp = 0.0;
 
 // integer value in seconds for default steep time length
 int steep_Time = 0;
@@ -87,6 +73,13 @@ int steep_Time = 0;
 int steep_Temp = 0;
 // String to hold the type of tea being steeped for display purposes
 char* teaType = "";
+
+// Timer configuration for temperature sensor interrupts
+hw_timer_t *Timer0_Cfg = NULL;
+
+void IRAM_ATTR TempSensor_ISR(){
+  currentTemp = mlx.readAmbientTempF();
+}
 
 // Action methods for tea variety buttons, setting the steeping time and temperature to the 
 // default values for the respective tea variety and drawing the ready screen with those values
@@ -170,6 +163,28 @@ void minusTime_pressAction(){
   }
   updateTime();
 }
+// Action method for start button
+void startSteeping_pressAction(){
+  Serial.print("Start Steeping Pressed");
+  if(water_distance() < 20){
+    Serial.print("Enough water detected: "+String(water_distance())+"cm");
+    currentState = HEAT;
+    drawSteepingScreen();    
+  }
+  else{
+    Serial.print("Not enough water detected: "+String(water_distance())+"cm");
+    drawWaterLevelWarning();
+  }
+}
+
+// Action method for stop steeping button, resetting to initial state and redrawing start screen
+void stopSteeping_pressAction(){
+  Serial.print("Stop Steeping Pressed");
+  timerEnd(Timer0_Cfg);
+  currentState = INIT;
+  drawStartScreen();
+}
+
 
 
 // Print Touchscreen info about X, Y and Pressure (Z) on the Serial Monitor
@@ -293,8 +308,42 @@ void drawReadyScreen(){
 
   btnBack.initButtonUL(5, SCREEN_HEIGHT-45, BUTTON_W-20, BUTTON_H/2, TFT_BLACK, TFT_WHITE, TFT_RED, "Back", BUTTON_FONT);
   btnBack.setPressAction(btnBack_pressAction);
-  btnBack.drawButton();  
+  btnBack.drawButton();
+  
+  startSteeping.initButtonUL(SCREEN_WIDTH/2-BUTTON_W/2, SCREEN_HEIGHT-BUTTON_H/2-10, BUTTON_W, BUTTON_H/2, 
+    TFT_BLACK, TFT_GREEN, TFT_WHITE, "Start", BUTTON_FONT);
+  startSteeping.setPressAction(startSteeping_pressAction);
+  startSteeping.drawButton();
   currentState = READY;
+}
+
+/**
+ * Draw a warning message if there is not enough water detected, which clears after 2 second delay
+ */
+void drawWaterLevelWarning(){
+  tft.fillRect(40, 40, SCREEN_WIDTH-80, SCREEN_HEIGHT-80, TFT_RED);
+  tft.setTextColor(TFT_WHITE, TFT_RED);
+  tft.setTextSize(1);
+  tft.drawCentreString("Not enough water detected!", SCREEN_WIDTH/2, SCREEN_HEIGHT/2, 1);
+  tft.drawCentreString("Please add more water before steeping.", SCREEN_WIDTH/2, SCREEN_HEIGHT/2+20, 1);
+  delay(2000);
+  drawReadyScreen();
+}
+
+void drawSteepingScreen(){
+  tft.fillScreen(TFT_WHITE);
+  tft.setTextColor(TFT_BLACK, TFT_WHITE);
+  tft.setTextSize(FONT_SIZE);
+  int centerX = SCREEN_WIDTH / 2;
+  int textY = 60;
+
+
+  stopSteeping.initButtonUL(SCREEN_WIDTH/2-BUTTON_W/2, SCREEN_HEIGHT-BUTTON_H/2-10, BUTTON_W, BUTTON_H/2, 
+    TFT_BLACK, TFT_RED, TFT_WHITE, "STOP", BUTTON_FONT);
+  stopSteeping.setPressAction(stopSteeping_pressAction);
+  stopSteeping.drawButton();
+
+  timerStart(Timer0_Cfg);
 }
 
 // Update the steeping time displayed on the ready screen, called from the plus and minus time buttons
@@ -335,10 +384,34 @@ void initTouchScreen(){
   tft.setRotation(1);
 }
 
+/**
+ * Initialize the water level sensor by setting the trigger pin as an output and the echo pin as an input
+ */
+void initWaterLevelSensor(){
+  pinMode(TRIG_PIN, OUTPUT); // Sets the trigPin as an Output
+  pinMode(ECHO_PIN, INPUT); // Sets the echoPin as an Input
+}
+
+/**
+ * Initialize the temperature sensor by configuring timer 0 and an interrupt that triggers every 100ms
+ * Establish TempSensor_ISR as the interrupt's ISR, but do not actually start the timer
+ */
+void initTemperatureSensor(){
+  if (!mlx.begin()){
+    Serial.print("Error - Could not connect to temperature sensor.");
+  }else{
+    Timer0_Cfg = timerBegin(1000000);
+    timerAttachInterrupt(Timer0_Cfg, &TempSensor_ISR);
+    timerAlarm(Timer0_Cfg, 100000, true,0);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   initTouchScreen();
   touch_calibrate();
+  initWaterLevelSensor();
+  initTemperatureSensor();
   drawStartScreen();
 }
 
@@ -353,7 +426,7 @@ void loop() {
     printTouchToSerial(Last_Touch_X,Last_Touch_Y,Last_Touch_Z);
     pressed = true;
     // Small delay to prevent multiple presses being registered from a single touch
-    delay(50);
+    delay(100);
   }
   else{
     pressed = false;
@@ -388,10 +461,30 @@ void loop() {
       }
     break;
     case HEAT:
-
+        for(uint8_t b = 0; b < menuThreeCnt; b++){
+          if(pressed){
+            if(steepingBtn[b]->contains(Last_Touch_X,Last_Touch_Y)){
+              steepingBtn[b]->press(true);
+              steepingBtn[b]->pressAction();
+            }
+          }
+          else{
+            steepingBtn[b]->press(false);
+          }
+        }
     break;
     case STEEP:
-
+        for(uint8_t b = 0; b < menuThreeCnt; b++){
+          if(pressed){
+            if(steepingBtn[b]->contains(Last_Touch_X,Last_Touch_Y)){
+              steepingBtn[b]->press(true);
+              steepingBtn[b]->pressAction();
+            }
+          }
+          else{
+            steepingBtn[b]->press(false);
+          }
+        }
     break;
     case DONE:
 
@@ -469,4 +562,22 @@ void touch_calibrate()
       f.close();
     }
   }
+}
+
+/**
+ * Measure the distance to the water level using the ultrasonic sensor, returning the distance in centimeters
+ * @return distance to water level in centimeters
+ */
+float water_distance(){
+  // Send a HIGH pulse for 10 microseconds on the trigger pin
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  
+  // Read high time of echo pin, returning the travel time in microseconds
+  float duration = pulseIn(ECHO_PIN, HIGH);
+  
+  // Calculate the distance using the speed of sound
+  float distanceCm = duration * SOUND_SPEED/2;
+  return distanceCm;
 }
