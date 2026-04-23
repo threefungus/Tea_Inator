@@ -36,3 +36,12 @@
 #define OOLONG_TEMP 196
 #define WHITE_TIME 180
 #define WHITE_TEMP 175
+
+//Define ULN2003 Motor Driver Pins
+#define MOTOR_IN1 19
+#define MOTOR_IN2 17
+#define MOTOR_IN3 16
+#define MOTOR_IN 4
+
+//Define pin for controlling the heating element
+#define HEATING_CONTROL 1

@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <TFT_eWidget.h>
@@ -75,10 +76,19 @@ int steep_Temp = 0;
 char* teaType = "";
 
 // Timer configuration for temperature sensor interrupts
-hw_timer_t *Timer0_Cfg = NULL;
+hw_timer_t *temp_timer = NULL;
+
+// Timer configuration for steeping 
+hw_timer_t *steep_timer = NULL;
+
+bool updateTempFlag = false;
 
 void IRAM_ATTR TempSensor_ISR(){
-  currentTemp = mlx.readAmbientTempF();
+  updateTempFlag = true;
+}
+
+void IRAM_ATTR SteepTimer_ISR(){
+  steep_Time--;
 }
 
 // Action methods for tea variety buttons, setting the steeping time and temperature to the 
@@ -180,7 +190,7 @@ void startSteeping_pressAction(){
 // Action method for stop steeping button, resetting to initial state and redrawing start screen
 void stopSteeping_pressAction(){
   Serial.print("Stop Steeping Pressed");
-  timerEnd(Timer0_Cfg);
+  timerEnd(temp_timer);
   currentState = INIT;
   drawStartScreen();
 }
@@ -337,13 +347,15 @@ void drawSteepingScreen(){
   int centerX = SCREEN_WIDTH / 2;
   int textY = 60;
 
+  String tempText = "Current Temperature: " + String(currentTemp) +" F";
+  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
 
   stopSteeping.initButtonUL(SCREEN_WIDTH/2-BUTTON_W/2, SCREEN_HEIGHT-BUTTON_H/2-10, BUTTON_W, BUTTON_H/2, 
     TFT_BLACK, TFT_RED, TFT_WHITE, "STOP", BUTTON_FONT);
   stopSteeping.setPressAction(stopSteeping_pressAction);
   stopSteeping.drawButton();
 
-  timerStart(Timer0_Cfg);
+  initTemperatureSensor();
 }
 
 // Update the steeping time displayed on the ready screen, called from the plus and minus time buttons
@@ -364,6 +376,16 @@ void updateTemp(){
   tft.setTextColor(TFT_BLACK, TFT_WHITE);
   tft.setTextSize(FONT_SIZE);
   String tempText = "Steeping Temperature: " + String(steep_Temp) +" F";
+  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
+}
+
+void updateSteepingScreen(){
+  int centerX = SCREEN_WIDTH / 2;
+  int textY = 60;
+  tft.fillRect(80, textY-20, SCREEN_WIDTH - 160, 40, TFT_WHITE);
+  tft.setTextColor(TFT_BLACK, TFT_WHITE);
+  tft.setTextSize(FONT_SIZE);
+  String tempText = "Current Temperature: " + String(currentTemp) +" F";
   tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
 }
 
@@ -400,9 +422,9 @@ void initTemperatureSensor(){
   if (!mlx.begin()){
     Serial.print("Error - Could not connect to temperature sensor.");
   }else{
-    Timer0_Cfg = timerBegin(1000000);
-    timerAttachInterrupt(Timer0_Cfg, &TempSensor_ISR);
-    timerAlarm(Timer0_Cfg, 100000, true,0);
+    temp_timer = timerBegin(1000000);
+    timerAttachInterrupt(temp_timer, &TempSensor_ISR);
+    timerAlarm(temp_timer, 100000, true,0);
   }
 }
 
@@ -411,7 +433,6 @@ void setup() {
   initTouchScreen();
   touch_calibrate();
   initWaterLevelSensor();
-  initTemperatureSensor();
   drawStartScreen();
 }
 
@@ -461,6 +482,15 @@ void loop() {
       }
     break;
     case HEAT:
+        if(updateTempFlag){
+          currentTemp = mlx.readAmbientTempF();
+          updateSteepingScreen();
+          updateTempFlag = false;
+          if(currentTemp >= steep_Temp){
+            currentState = STEEP;
+
+          }
+        }
         for(uint8_t b = 0; b < menuThreeCnt; b++){
           if(pressed){
             if(steepingBtn[b]->contains(Last_Touch_X,Last_Touch_Y)){
@@ -474,6 +504,9 @@ void loop() {
         }
     break;
     case STEEP:
+        if(steep_Time <= 0){
+          currentState = DONE;
+        }
         for(uint8_t b = 0; b < menuThreeCnt; b++){
           if(pressed){
             if(steepingBtn[b]->contains(Last_Touch_X,Last_Touch_Y)){
