@@ -41,7 +41,10 @@
 #define MOTOR_IN1 19
 #define MOTOR_IN2 17
 #define MOTOR_IN3 16
-#define MOTOR_IN 4
+#define MOTOR_IN4 4
+
+//Define the number of steps in a rotation
+#define stepsPerRev 2048
 
 //Define pin for controlling the heating element
 #define HEATING_CONTROL 1

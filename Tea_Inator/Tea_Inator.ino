@@ -4,8 +4,23 @@
 #include <TFT_eWidget.h>
 #include <XPT2046_Touchscreen.h>
 #include <Adafruit_MLX90614.h>
+#include <Stepper.h>
 #include "ConstantDefinitons.h"
 
+// Needed motor steps to raise and lower the tea basket
+const int stepsToLower = 2*stepsPerRev;
+const int stepsToRaise = -stepsToLower;
+
+// Maximum time the heating element is turned off for during power cycling (ms)
+const int cycleInterval = 10000;
+unsigned long turnOffTime = 0;
+unsigned long turnOnTime = 0;
+unsigned long currentMillis = 0;
+
+double turnOffRange = 5.0;
+
+// Variable used to change heating element controller state
+int heatState = LOW;
 
 // Create instances of touchscreen and SPI libraries
 TFT_eSPI tft = TFT_eSPI();
@@ -14,7 +29,10 @@ XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 
 
 // Create instance of the temperature sensor library
- Adafruit_MLX90614 mlx = Adafruit_MLX90614();
+Adafruit_MLX90614 mlx = Adafruit_MLX90614();
+
+// Create instance of stepper motor controller
+Stepper stepper(stepsPerRev, MOTOR_IN1, MOTOR_IN2, MOTOR_IN3, MOTOR_IN4);
 
 // Define possible states for FSM, and a global to track the current state
 enum State{
@@ -82,13 +100,18 @@ hw_timer_t *temp_timer = NULL;
 hw_timer_t *steep_timer = NULL;
 
 bool updateTempFlag = false;
+bool updateTimeFlag = false;
+
+bool basketLowered = false;
 
 void IRAM_ATTR TempSensor_ISR(){
   updateTempFlag = true;
 }
 
 void IRAM_ATTR SteepTimer_ISR(){
-  steep_Time--;
+  if(steep_Time > 0)
+    steep_Time--;
+  updateTimeFlag = true;
 }
 
 // Action methods for tea variety buttons, setting the steeping time and temperature to the 
@@ -179,6 +202,8 @@ void startSteeping_pressAction(){
   if(water_distance() < 20){
     Serial.print("Enough water detected: "+String(water_distance())+"cm");
     currentState = HEAT;
+    turnOnTime = millis();
+    heatState = HIGH;
     drawSteepingScreen();    
   }
   else{
@@ -190,12 +215,17 @@ void startSteeping_pressAction(){
 // Action method for stop steeping button, resetting to initial state and redrawing start screen
 void stopSteeping_pressAction(){
   Serial.print("Stop Steeping Pressed");
+  digitalWrite(HEATING_CONTROL,LOW);
+  heatState = LOW;
   timerEnd(temp_timer);
+  timerEnd(steep_timer);
   currentState = INIT;
+  if(basketLowered){
+    stepper.step(stepsToRaise);
+    basketLowered = false;
+  }
   drawStartScreen();
 }
-
-
 
 // Print Touchscreen info about X, Y and Pressure (Z) on the Serial Monitor
 void printTouchToSerial(int touchX, int touchY, int touchZ) {
@@ -206,29 +236,6 @@ void printTouchToSerial(int touchX, int touchY, int touchZ) {
   Serial.print(" | Pressure = ");
   Serial.print(touchZ);
   Serial.println();
-}
-
-/** 
- *  Print Touchscreen info about X, Y and Pressure (Z) on the TFT Display
-*/
-void printTouchToDisplay(int touchX, int touchY, int touchZ) {
-  // Clear TFT screen
-  tft.fillScreen(TFT_WHITE);
-  tft.setTextColor(TFT_BLACK, TFT_WHITE);
-
-  int centerX = SCREEN_WIDTH / 2;
-  int textY = 80;
- 
-  String tempText = "X = " + String(touchX);
-  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
-
-  textY += 20;
-  tempText = "Y = " + String(touchY);
-  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
-
-  textY += 20;
-  tempText = "Pressure = " + String(touchZ);
-  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
 }
 
 /**
@@ -350,6 +357,10 @@ void drawSteepingScreen(){
   String tempText = "Current Temperature: " + String(currentTemp) +" F";
   tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
 
+  textY += 80;
+  tempText = "Remaining Time: " + String(steep_Time / 60) +"min " + String(steep_Time % 60) +"sec";
+  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
+
   stopSteeping.initButtonUL(SCREEN_WIDTH/2-BUTTON_W/2, SCREEN_HEIGHT-BUTTON_H/2-10, BUTTON_W, BUTTON_H/2, 
     TFT_BLACK, TFT_RED, TFT_WHITE, "STOP", BUTTON_FONT);
   stopSteeping.setPressAction(stopSteeping_pressAction);
@@ -382,10 +393,14 @@ void updateTemp(){
 void updateSteepingScreen(){
   int centerX = SCREEN_WIDTH / 2;
   int textY = 60;
-  tft.fillRect(80, textY-20, SCREEN_WIDTH - 160, 40, TFT_WHITE);
+  tft.fillRect(80, textY-20, SCREEN_WIDTH - 160, textY +80, TFT_WHITE);
   tft.setTextColor(TFT_BLACK, TFT_WHITE);
   tft.setTextSize(FONT_SIZE);
   String tempText = "Current Temperature: " + String(currentTemp) +" F";
+  tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
+
+  textY += 80;
+  tempText = "Remaining Time: " + String(steep_Time / 60) +"min " + String(steep_Time % 60) +"sec";
   tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
 }
 
@@ -428,11 +443,27 @@ void initTemperatureSensor(){
   }
 }
 
+/**
+ * Initialize the stepper motor controller, asigning a rotation speed
+ */
+void initMotor(){
+  // Set rotation speed of stepper motor
+  stepper.setSpeed(10);
+}
+
+void initSteepTimer(){
+  steep_timer = timerBegin(1000000);
+  timerAttachInterrupt(steep_timer, &SteepTimer_ISR);
+  timerAlarm(steep_timer, 1000000, true,0);
+}
+
 void setup() {
   Serial.begin(115200);
   initTouchScreen();
   touch_calibrate();
   initWaterLevelSensor();
+  initMotor();
+  pinMode(HEATING_CONTROL,OUTPUT);
   drawStartScreen();
 }
 
@@ -444,10 +475,10 @@ void loop() {
     Last_Touch_X = map(p.x, 200, 3700, 1, SCREEN_WIDTH);
     Last_Touch_Y = map(p.y, 240, 3800, 1, SCREEN_HEIGHT);
     Last_Touch_Z = p.z;
-    printTouchToSerial(Last_Touch_X,Last_Touch_Y,Last_Touch_Z);
+    //printTouchToSerial(Last_Touch_X,Last_Touch_Y,Last_Touch_Z);
     pressed = true;
     // Small delay to prevent multiple presses being registered from a single touch
-    delay(100);
+    delay(200);
   }
   else{
     pressed = false;
@@ -456,6 +487,7 @@ void loop() {
   //Begin FSM
   switch(currentState){
     case INIT:
+    {
       for(uint8_t b = 0; b < teaBtnCnt; b++){
         if(pressed){
           if(teaBtn[b]->contains(Last_Touch_X,Last_Touch_Y)){
@@ -467,8 +499,10 @@ void loop() {
           teaBtn[b]->press(false);
         }
       }
-    break;
+      break;
+    }
     case READY:
+    {
       for(uint8_t b = 0; b < menuTwoCnt; b++){
         if(pressed){
           if(menuTwoBtn[b]->contains(Last_Touch_X,Last_Touch_Y)){
@@ -480,50 +514,87 @@ void loop() {
           menuTwoBtn[b]->press(false);
         }
       }
-    break;
+      break;
+    }
     case HEAT:
-        if(updateTempFlag){
-          currentTemp = mlx.readAmbientTempF();
-          updateSteepingScreen();
-          updateTempFlag = false;
-          if(currentTemp >= steep_Temp){
-            currentState = STEEP;
+    {
+      currentMillis = millis();
+      if(updateTempFlag){
+        currentTemp = mlx.readObjectTempF();
+        updateSteepingScreen();
+        updateTempFlag = false;
+      }
+      // If target temp has been reached, turn off heating element, start steeping process
+      if(currentTemp >= steep_Temp){
+        Serial.print("Target Temp Reached");
+        heatState = LOW;
+        currentState = STEEP;
+        timerEnd(temp_timer);
+        initSteepTimer();
+      } // If current temp is within the "coasting" range of the heating element, turn it off
+      else if((currentTemp >= steep_Temp - turnOffRange) && (currentMillis >= turnOnTime + cycleInterval)){
+        heatState = LOW;
+        turnOffTime = currentMillis;
+      } // If the heating element has been off for "cycleInterval" number ms, turn it back on
+      else if(currentMillis >= turnOffTime + cycleInterval){
+        heatState = HIGH;
+        turnOnTime = currentMillis;
+      }
+      
+      for(uint8_t b = 0; b < menuThreeCnt; b++){
+        if(pressed){
+          if(steepingBtn[b]->contains(Last_Touch_X,Last_Touch_Y)){
+            steepingBtn[b]->press(true);
+            steepingBtn[b]->pressAction();
+          }
+        }
+        else{
+          steepingBtn[b]->press(false);
+        }
+      }
 
-          }
-        }
-        for(uint8_t b = 0; b < menuThreeCnt; b++){
-          if(pressed){
-            if(steepingBtn[b]->contains(Last_Touch_X,Last_Touch_Y)){
-              steepingBtn[b]->press(true);
-              steepingBtn[b]->pressAction();
-            }
-          }
-          else{
-            steepingBtn[b]->press(false);
-          }
-        }
-    break;
+      digitalWrite(HEATING_CONTROL,heatState);
+      break;
+    }
     case STEEP:
-        if(steep_Time <= 0){
-          currentState = DONE;
-        }
-        for(uint8_t b = 0; b < menuThreeCnt; b++){
-          if(pressed){
-            if(steepingBtn[b]->contains(Last_Touch_X,Last_Touch_Y)){
-              steepingBtn[b]->press(true);
-              steepingBtn[b]->pressAction();
-            }
+    {
+      if(!basketLowered){
+        stepper.step(stepsToLower);
+        basketLowered = true;
+      }
+      Serial.print("In STEEP state");
+      digitalWrite(HEATING_CONTROL,LOW);
+      if(updateTimeFlag){
+        updateSteepingScreen();
+        updateTimeFlag = false;
+      }
+      if(steep_Time <= 0){
+        currentState = DONE;
+        stepper.step(stepsToRaise);
+        basketLowered = false;
+      }
+      for(uint8_t b = 0; b < menuThreeCnt; b++){
+        if(pressed){
+          if(steepingBtn[b]->contains(Last_Touch_X,Last_Touch_Y)){
+            steepingBtn[b]->press(true);
+            steepingBtn[b]->pressAction();
           }
-          else{
-            steepingBtn[b]->press(false);
-          }
         }
-    break;
+        else{
+          steepingBtn[b]->press(false);
+        }
+      }
+      break;
+    }
     case DONE:
+    {
 
     break;
+    }
     default:
+    {
     break;
+    }
   }
   
 }
