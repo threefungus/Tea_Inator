@@ -8,7 +8,7 @@
 #include "ConstantDefinitons.h"
 
 // Needed motor steps to raise and lower the tea basket
-const int stepsToLower = 2*stepsPerRev;
+const int stepsToLower = 1.5*stepsPerRev;
 const int stepsToRaise = -stepsToLower;
 
 // Maximum time the heating element is turned off for during power cycling (ms)
@@ -199,11 +199,12 @@ void minusTime_pressAction(){
 // Action method for start button
 void startSteeping_pressAction(){
   Serial.print("Start Steeping Pressed");
-  if(water_distance() < 20){
+  if(water_distance() < 13){
     Serial.print("Enough water detected: "+String(water_distance())+"cm");
     currentState = HEAT;
     turnOnTime = millis();
     heatState = HIGH;
+    //tft.drawString(String(water_distance()), 50, 5, 1);
     drawSteepingScreen();    
   }
   else{
