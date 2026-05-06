@@ -8,8 +8,8 @@
 #include "ConstantDefinitons.h"
 
 // Needed motor steps to raise and lower the tea basket
-const int stepsToLower = 1.5*stepsPerRev;
-const int stepsToRaise = -stepsToLower;
+const int stepsToLower = 1.4*stepsPerRev;
+const int stepsToRaise = -1.3*stepsToLower;
 
 // Maximum time the heating element is turned off for during power cycling (ms)
 const int cycleInterval = 10000;
@@ -63,6 +63,9 @@ ButtonWidget startSteeping = ButtonWidget(&tft);
 // Stop Button for steeping screen
 ButtonWidget stopSteeping = ButtonWidget(&tft);
 
+// Done button for final screen
+ButtonWidget doneBtn = ButtonWidget(&tft);
+
 // Array to hold pointers to first menu buttons for easier access in the FSM
 ButtonWidget* teaBtn[] = {&btnBlack, &btnGreen, &btnHerbal, &btnOolong, &btnWhite, &btnManual};;
 // Calculate the number of buttons in the first menu for use in loops
@@ -77,6 +80,11 @@ uint8_t menuTwoCnt = sizeof(menuTwoBtn) / sizeof(menuTwoBtn[0]);
 ButtonWidget* steepingBtn[] = {&stopSteeping};
 // Calculate the number of buttons in the third menu for use in loops
 uint8_t menuThreeCnt = sizeof(steepingBtn) / sizeof(steepingBtn[0]);
+
+// Array to hold pointers to final menu buttons for easier access in FSM
+ButtonWidget* finalBtns[] = {&doneBtn};
+// Calculate the number of buttons in the final menu for looping
+uint8_t finalBtnCnt = sizeof(finalBtns) / sizeof(finalBtns[0]);
 
 //Keep track of last point user input on touchscreen
 int Last_Touch_X = 0;
@@ -103,6 +111,8 @@ bool updateTempFlag = false;
 bool updateTimeFlag = false;
 
 bool basketLowered = false;
+
+bool keepWarm = false;
 
 void IRAM_ATTR TempSensor_ISR(){
   updateTempFlag = true;
@@ -225,6 +235,16 @@ void stopSteeping_pressAction(){
     stepper.step(stepsToRaise);
     basketLowered = false;
   }
+  drawStartScreen();
+}
+
+// Action method to clear done screen
+void doneBtn_pressAction(){
+  timerEnd(temp_timer);
+  timerEnd(steep_timer);
+  digitalWrite(HEATING_CONTROL,LOW);
+  stepper.step(stepsToLower*0.3);
+  currentState = INIT;
   drawStartScreen();
 }
 
@@ -362,12 +382,28 @@ void drawSteepingScreen(){
   tempText = "Remaining Time: " + String(steep_Time / 60) +"min " + String(steep_Time % 60) +"sec";
   tft.drawCentreString(tempText, centerX, textY, FONT_SIZE);
 
-  stopSteeping.initButtonUL(SCREEN_WIDTH/2-BUTTON_W/2, SCREEN_HEIGHT-BUTTON_H/2-10, BUTTON_W, BUTTON_H/2, 
+  stopSteeping.initButtonUL(5, SCREEN_HEIGHT-BUTTON_H/2-10, BUTTON_W, BUTTON_H/2, 
     TFT_BLACK, TFT_RED, TFT_WHITE, "STOP", BUTTON_FONT);
   stopSteeping.setPressAction(stopSteeping_pressAction);
   stopSteeping.drawButton();
 
   initTemperatureSensor();
+}
+
+void drawDoneScreen(){
+  tft.fillScreen(TFT_WHITE);
+  tft.setTextColor(TFT_BLACK, TFT_WHITE);
+  tft.setTextSize(FONT_SIZE);
+  int centerX = SCREEN_WIDTH / 2;
+  int textY = 60;
+
+  String tempText = "Steeping Complete!";
+  tft.drawCentreString(tempText, centerX, textY, 2);
+
+  doneBtn.initButtonUL(SCREEN_WIDTH/2 - BUTTON_W/2, SCREEN_HEIGHT-BUTTON_H/2-10, BUTTON_W, BUTTON_H/2, 
+    TFT_BLACK, TFT_GREEN, TFT_WHITE, "Done", BUTTON_FONT);
+  doneBtn.setPressAction(doneBtn_pressAction);
+  doneBtn.drawButton();
 }
 
 // Update the steeping time displayed on the ready screen, called from the plus and minus time buttons
@@ -449,7 +485,7 @@ void initTemperatureSensor(){
  */
 void initMotor(){
   // Set rotation speed of stepper motor
-  stepper.setSpeed(10);
+  stepper.setSpeed(4);
 }
 
 void initSteepTimer(){
@@ -531,7 +567,6 @@ void loop() {
         heatState = LOW;
         currentState = STEEP;
         timerEnd(temp_timer);
-        initSteepTimer();
       } // If current temp is within the "coasting" range of the heating element, turn it off
       else if((currentTemp >= steep_Temp - turnOffRange) && (currentMillis >= turnOnTime + cycleInterval)){
         heatState = LOW;
@@ -562,6 +597,7 @@ void loop() {
       if(!basketLowered){
         stepper.step(stepsToLower);
         basketLowered = true;
+        initSteepTimer();
       }
       Serial.print("In STEEP state");
       digitalWrite(HEATING_CONTROL,LOW);
@@ -573,6 +609,7 @@ void loop() {
         currentState = DONE;
         stepper.step(stepsToRaise);
         basketLowered = false;
+        drawDoneScreen();
       }
       for(uint8_t b = 0; b < menuThreeCnt; b++){
         if(pressed){
@@ -589,7 +626,17 @@ void loop() {
     }
     case DONE:
     {
-
+      for(uint8_t b = 0; b < finalBtnCnt; b++){
+        if(pressed){
+          if(finalBtns[b]->contains(Last_Touch_X,Last_Touch_Y)){
+            finalBtns[b]->press(true);
+            finalBtns[b]->pressAction();
+          }
+        }
+        else{
+          finalBtns[b]->press(false);
+        }
+      }
     break;
     }
     default:
